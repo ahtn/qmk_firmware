@@ -6,7 +6,7 @@
 #include "rgblight.h"
 #include "debug.h"
 
-const uint8_t DIM_CURVE[] PROGMEM = {
+static const uint8_t DIM_CURVE[] PROGMEM = {
   0, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3,
   3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4,
   4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6,
@@ -24,7 +24,9 @@ const uint8_t DIM_CURVE[] PROGMEM = {
   146, 149, 151, 154, 157, 159, 162, 165, 168, 171, 174, 177, 180, 183, 186, 190,
   193, 196, 200, 203, 207, 211, 214, 218, 222, 226, 230, 234, 238, 242, 248, 255
 };
-const uint8_t RGBLED_BREATHING_TABLE[] PROGMEM = {
+
+#ifdef RGBLIGHT_ANIMATION
+static const uint8_t RGBLED_BREATHING_TABLE[] PROGMEM = {
   0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 4, 5, 5, 6, 7, 9,
   10, 11, 12, 14, 15, 17, 18, 20, 21, 23, 25, 27, 29, 31, 33, 35,
   37, 40, 42, 44, 47, 49, 52, 54, 57, 59, 62, 65, 67, 70, 73, 76,
@@ -42,17 +44,23 @@ const uint8_t RGBLED_BREATHING_TABLE[] PROGMEM = {
   37, 35, 33, 31, 29, 27, 25, 23, 21, 20, 18, 17, 15, 14, 12, 11,
   10, 9, 7, 6, 5, 5, 4, 3, 2, 2, 1, 1, 1, 0, 0, 0
 };
-const uint8_t RGBLED_BREATHING_INTERVALS[] PROGMEM = {30, 20, 10, 5};
-const uint8_t RGBLED_RAINBOW_MOOD_INTERVALS[] PROGMEM = {120, 60, 30};
-const uint8_t RGBLED_RAINBOW_SWIRL_INTERVALS[] PROGMEM = {100, 50, 20};
-const uint8_t RGBLED_SNAKE_INTERVALS[] PROGMEM = {100, 50, 20};
-const uint8_t RGBLED_KNIGHT_INTERVALS[] PROGMEM = {100, 50, 20};
+
+static const uint8_t RGBLED_BREATHING_INTERVALS[] PROGMEM = {30, 20, 10, 5};
+static const uint8_t RGBLED_RAINBOW_MOOD_INTERVALS[] PROGMEM = {120, 60, 30};
+static const uint8_t RGBLED_SNAKE_INTERVALS[] PROGMEM = {100, 50, 20};
+static const uint8_t RGBLED_KNIGHT_INTERVALS[] PROGMEM = {100, 50, 20};
+
+static void rgblight_effect_breathing(uint8_t interval, uint16_t timer);
+static void rgblight_effect_rainbow_mood(uint8_t interval, uint16_t timer);
+static void rgblight_effect_rainbow_swirl(uint8_t interval, uint16_t timer);
+static void rgblight_effect_snake(uint8_t interval, uint16_t timer);
+static void rgblight_effect_knight(uint8_t interval, uint16_t timer);
+#endif
 
 rgblight_config_t rgblight_config;
 rgblight_config_t inmem_config;
 struct cRGB led[RGBLED_NUM];
 uint8_t rgblight_inited = 0;
-
 
 void sethsv(uint16_t hue, uint8_t sat, uint8_t val, struct cRGB *led1) {
   // Convert hue, saturation, and value (HSV/HSB) to RGB. DIM_CURVE is used only
@@ -156,10 +164,6 @@ void rgblight_init(void) {
   }
   eeconfig_debug_rgblight(); // display current eeprom values
 
-  #if !defined(AUDIO_ENABLE) && defined(RGBLIGHT_TIMER)
-    rgblight_timer_init(); // setup the timer
-  #endif
-
   if (rgblight_config.enable) {
     rgblight_mode(rgblight_config.mode);
   }
@@ -203,8 +207,8 @@ void rgblight_mode(uint8_t mode) {
   eeconfig_update_rgblight(rgblight_config.raw);
   xprintf("rgblight mode: %u\n", rgblight_config.mode);
   if (rgblight_config.mode == 1) {
-    #if !defined(AUDIO_ENABLE) && defined(RGBLIGHT_TIMER)
-      rgblight_timer_disable();
+    #if defined(RGBLIGHT_ANIMATION)
+      rgblight_animation_disable();
     #endif
   } else if (rgblight_config.mode >= 2 && rgblight_config.mode <= 23) {
     // MODE 2-5, breathing
@@ -213,8 +217,8 @@ void rgblight_mode(uint8_t mode) {
     // MODE 15-20, snake
     // MODE 21-23, knight
 
-    #if !defined(AUDIO_ENABLE) && defined(RGBLIGHT_TIMER)
-      rgblight_timer_enable();
+    #if defined(RGBLIGHT_ANIMATION)
+      rgblight_animation_enable();
     #endif
   }
   rgblight_sethsv(rgblight_config.hue, rgblight_config.sat, rgblight_config.val);
@@ -227,8 +231,8 @@ void rgblight_toggle(void) {
   if (rgblight_config.enable) {
     rgblight_mode(rgblight_config.mode);
   } else {
-    #if !defined(AUDIO_ENABLE) && defined(RGBLIGHT_TIMER)
-      rgblight_timer_disable();
+    #if defined(RGBLIGHT_ANIMATION)
+      rgblight_animation_disable();
     #endif
     _delay_ms(50);
     rgblight_set();
@@ -345,91 +349,82 @@ void rgblight_set(void) {
   }
 }
 
-#if !defined(AUDIO_ENABLE) && defined(RGBLIGHT_TIMER)
+#if defined(RGBLIGHT_ANIMATION)
 
-// Animation timer -- AVR Timer3
-void rgblight_timer_init(void) {
-  static uint8_t rgblight_timer_is_init = 0;
-  if (rgblight_timer_is_init) {
+static bool rgblight_animation_on = false;
+static uint16_t last_timer = 0;
+
+void rgblight_animation_enable(void) {
+  rgblight_animation_on = true;
+  last_timer = 0;
+}
+
+void rgblight_animation_disable(void) {
+  rgblight_animation_on = false;
+  last_timer = 0;
+}
+
+void rgblight_animation_toggle(void) {
+  rgblight_animation_on = !rgblight_animation_on;
+  last_timer = 0;
+}
+
+void rgblight_animation_poll(uint16_t timer) {
+  if (!rgblight_animation_on) {
     return;
   }
-  rgblight_timer_is_init = 1;
-  /* Timer 3 setup */
-  TCCR3B = _BV(WGM32) //CTC mode OCR3A as TOP
-        | _BV(CS30); //Clock selelct: clk/1
-  /* Set TOP value */
-  uint8_t sreg = SREG;
-  cli();
-  OCR3AH = (RGBLED_TIMER_TOP >> 8) & 0xff;
-  OCR3AL = RGBLED_TIMER_TOP & 0xff;
-  SREG = sreg;
-}
-void rgblight_timer_enable(void) {
-  TIMSK3 |= _BV(OCIE3A);
-  dprintf("TIMER3 enabled.\n");
-}
-void rgblight_timer_disable(void) {
-  TIMSK3 &= ~_BV(OCIE3A);
-  dprintf("TIMER3 disabled.\n");
-}
-void rgblight_timer_toggle(void) {
-  TIMSK3 ^= _BV(OCIE3A);
-  dprintf("TIMER3 toggled.\n");
-}
 
-ISR(TIMER3_COMPA_vect) {
   // mode = 1, static light, do nothing here
   if (rgblight_config.mode >= 2 && rgblight_config.mode <= 5) {
     // mode = 2 to 5, breathing mode
-    rgblight_effect_breathing(rgblight_config.mode - 2);
+    rgblight_effect_breathing(rgblight_config.mode - 2, timer);
   } else if (rgblight_config.mode >= 6 && rgblight_config.mode <= 8) {
     // mode = 6 to 8, rainbow mood mod
-    rgblight_effect_rainbow_mood(rgblight_config.mode - 6);
+    rgblight_effect_rainbow_mood(rgblight_config.mode - 6, timer);
   } else if (rgblight_config.mode >= 9 && rgblight_config.mode <= 14) {
     // mode = 9 to 14, rainbow swirl mode
-    rgblight_effect_rainbow_swirl(rgblight_config.mode - 9);
+    rgblight_effect_rainbow_swirl(rgblight_config.mode - 9, timer);
   } else if (rgblight_config.mode >= 15 && rgblight_config.mode <= 20) {
     // mode = 15 to 20, snake mode
-    rgblight_effect_snake(rgblight_config.mode - 15);
+    rgblight_effect_snake(rgblight_config.mode - 15, timer);
   } else if (rgblight_config.mode >= 21 && rgblight_config.mode <= 23) {
     // mode = 21 to 23, knight mode
-    rgblight_effect_knight(rgblight_config.mode - 21);
+    rgblight_effect_knight(rgblight_config.mode - 21, timer);
   }
 }
 
 // Effects
-void rgblight_effect_breathing(uint8_t interval) {
+static void rgblight_effect_breathing(uint8_t interval, uint16_t timer) {
   static uint8_t pos = 0;
-  static uint16_t last_timer = 0;
 
-  if (timer_elapsed(last_timer) < pgm_read_byte(&RGBLED_BREATHING_INTERVALS[interval])) {
+  if ((timer-last_timer) < pgm_read_byte(&RGBLED_BREATHING_INTERVALS[interval])) {
     return;
   }
-  last_timer = timer_read();
+  last_timer = timer;
 
   rgblight_sethsv_noeeprom(rgblight_config.hue, rgblight_config.sat, pgm_read_byte(&RGBLED_BREATHING_TABLE[pos]));
   pos = (pos + 1) % 256;
 }
-void rgblight_effect_rainbow_mood(uint8_t interval) {
-  static uint16_t current_hue = 0;
-  static uint16_t last_timer = 0;
 
-  if (timer_elapsed(last_timer) < pgm_read_byte(&RGBLED_RAINBOW_MOOD_INTERVALS[interval])) {
+static void rgblight_effect_rainbow_mood(uint8_t interval, uint16_t timer) {
+  static uint16_t current_hue = 0;
+
+  if ((timer-last_timer) < pgm_read_byte(&RGBLED_RAINBOW_MOOD_INTERVALS[interval])) {
     return;
   }
-  last_timer = timer_read();
+  last_timer = timer;
   rgblight_sethsv_noeeprom(current_hue, rgblight_config.sat, rgblight_config.val);
   current_hue = (current_hue + 1) % 360;
 }
-void rgblight_effect_rainbow_swirl(uint8_t interval) {
+
+static void rgblight_effect_rainbow_swirl(uint8_t interval, uint16_t timer) {
   static uint16_t current_hue = 0;
-  static uint16_t last_timer = 0;
   uint16_t hue;
   uint8_t i;
-  if (timer_elapsed(last_timer) < pgm_read_byte(&RGBLED_RAINBOW_MOOD_INTERVALS[interval / 2])) {
+  if ((timer-last_timer) < pgm_read_byte(&RGBLED_RAINBOW_MOOD_INTERVALS[interval / 2])) {
     return;
   }
-  last_timer = timer_read();
+  last_timer = timer;
   for (i = 0; i < RGBLED_NUM; i++) {
     hue = (360 / RGBLED_NUM * i + current_hue) % 360;
     sethsv(hue, rgblight_config.sat, rgblight_config.val, &led[i]);
@@ -446,19 +441,19 @@ void rgblight_effect_rainbow_swirl(uint8_t interval) {
     }
   }
 }
-void rgblight_effect_snake(uint8_t interval) {
+
+static void rgblight_effect_snake(uint8_t interval, uint16_t timer) {
   static uint8_t pos = 0;
-  static uint16_t last_timer = 0;
   uint8_t i, j;
   int8_t k;
   int8_t increment = 1;
   if (interval % 2) {
     increment = -1;
   }
-  if (timer_elapsed(last_timer) < pgm_read_byte(&RGBLED_SNAKE_INTERVALS[interval / 2])) {
+  if ((timer-last_timer) < pgm_read_byte(&RGBLED_SNAKE_INTERVALS[interval / 2])) {
     return;
   }
-  last_timer = timer_read();
+  last_timer = timer;
   for (i = 0; i < RGBLED_NUM; i++) {
     led[i].r = 0;
     led[i].g = 0;
@@ -484,17 +479,17 @@ void rgblight_effect_snake(uint8_t interval) {
     pos = (pos + 1) % RGBLED_NUM;
   }
 }
-void rgblight_effect_knight(uint8_t interval) {
+
+static void rgblight_effect_knight(uint8_t interval, uint16_t timer) {
   static int8_t pos = 0;
-  static uint16_t last_timer = 0;
   uint8_t i, j, cur;
   int8_t k;
   struct cRGB preled[RGBLED_NUM];
   static int8_t increment = -1;
-  if (timer_elapsed(last_timer) < pgm_read_byte(&RGBLED_KNIGHT_INTERVALS[interval])) {
+  if ((timer-last_timer) < pgm_read_byte(&RGBLED_KNIGHT_INTERVALS[interval])) {
     return;
   }
-  last_timer = timer_read();
+  last_timer = timer;
   for (i = 0; i < RGBLED_NUM; i++) {
     preled[i].r = 0;
     preled[i].g = 0;

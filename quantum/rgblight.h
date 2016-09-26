@@ -2,7 +2,7 @@
 #define RGBLIGHT_H
 
 
-#if !defined(AUDIO_ENABLE) && defined(RGBLIGHT_TIMER)
+#if defined(RGBLIGHT_ANIMATION)
 	#define RGBLIGHT_MODES 23
 #else
 	#define RGBLIGHT_MODES 1
@@ -76,14 +76,11 @@ void sethsv(uint16_t hue, uint8_t sat, uint8_t val, struct cRGB *led1);
 void setrgb(uint8_t r, uint8_t g, uint8_t b, struct cRGB *led1);
 void rgblight_sethsv_noeeprom(uint16_t hue, uint8_t sat, uint8_t val);
 
-void rgblight_timer_init(void);
-void rgblight_timer_enable(void);
-void rgblight_timer_disable(void);
-void rgblight_timer_toggle(void);
-void rgblight_effect_breathing(uint8_t interval);
-void rgblight_effect_rainbow_mood(uint8_t interval);
-void rgblight_effect_rainbow_swirl(uint8_t interval);
-void rgblight_effect_snake(uint8_t interval);
-void rgblight_effect_knight(uint8_t interval);
+#if defined(RGBLIGHT_ANIMATION)
+void rgblight_animation_enable(void);
+void rgblight_animation_disable(void);
+void rgblight_animation_toggle(void);
+void rgblight_animation_poll(uint16_t timer);
+#endif
 
 #endif
